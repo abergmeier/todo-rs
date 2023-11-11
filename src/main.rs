@@ -1,4 +1,6 @@
 use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{Ok, Result};
 use colors_transform::{Color, Rgb};
@@ -72,8 +74,6 @@ fn main() -> Result<()> {
     ))?;
     wifi.start()?;
     wifi.wait_netif_up()?;
-    core::mem::forget(wifi);
-    core::mem::forget(esp_wifi);
 
     let mut srv = EspHttpServer::new(&Default::default())?;
     srv.fn_handler("/", Method::Get, |req| {
@@ -85,7 +85,10 @@ fn main() -> Result<()> {
         let mut red = m.lock()?;
         handle_post_request(req, &led_color_mutex, &ws_rmt_mutex, &mut red)
     })?;
-    core::mem::forget(srv);
+
+    loop {
+        thread::sleep(Duration::from_secs(60));
+    }
 
     Ok(())
 }
