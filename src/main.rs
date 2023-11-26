@@ -4,10 +4,11 @@ use std::time::Duration;
 
 use anyhow::{Ok, Result};
 use colors_transform::{Color, Rgb};
+use drivers::Leds;
 use esp_idf_hal::io::Write;
 use esp_idf_hal::ledc::config::TimerConfig;
 use esp_idf_hal::ledc::{LedcDriver, LedcTimerDriver};
-use esp_idf_hal::prelude::Peripherals;
+use esp_idf_hal::prelude::*;
 use esp_idf_hal::units::FromValueType;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::http::server::{
@@ -21,6 +22,7 @@ use esp_idf_sys::{self as _};
 use log::info;
 
 use crate::rgb_led::WS2812RMT;
+mod drivers;
 mod rgb_led;
 
 const SSID: &str = "lunas-christmas";
@@ -29,7 +31,7 @@ fn main() -> Result<()> {
     esp_idf_sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    let led_color_mutex = Mutex::new(Rgb::from(0.5, 0.5, 0.5));
+    let led_color_mutex = Mutex::new(Rgb::from(255.0, 0.5, 0.5));
 
     let peripherals = Peripherals::take().unwrap();
 
@@ -37,25 +39,59 @@ fn main() -> Result<()> {
         peripherals.ledc.timer0,
         &TimerConfig::default().frequency(25_u32.kHz().into()),
     )?;
-    let red = LedcDriver::new(
-        peripherals.ledc.channel0,
-        &timer_driver,
-        peripherals.pins.gpio9,
-    )?;
-    let ws_rmt = {
-        let mut ws = WS2812RMT::new(peripherals.pins.gpio8, peripherals.rmt.channel0)?;
+    let anode_rgb_drivers = (
+        LedcDriver::new(
+            peripherals.ledc.channel0,
+            &timer_driver,
+            peripherals.pins.gpio0,
+        )?,
+        LedcDriver::new(
+            peripherals.ledc.channel1,
+            &timer_driver,
+            peripherals.pins.gpio1,
+        )?,
+        LedcDriver::new(
+            peripherals.ledc.channel2,
+            &timer_driver,
+            peripherals.pins.gpio2,
+        )?,
+    );
+    let cathode_rgb_drivers = (
+        LedcDriver::new(
+            peripherals.ledc.channel3,
+            &timer_driver,
+            peripherals.pins.gpio4,
+        )?,
+        LedcDriver::new(
+            peripherals.ledc.channel4,
+            &timer_driver,
+            peripherals.pins.gpio5,
+        )?,
+        LedcDriver::new(
+            peripherals.ledc.channel5,
+            &timer_driver,
+            peripherals.pins.gpio6,
+        )?,
+    );
+    let ws_rmt = WS2812RMT::new(peripherals.pins.gpio8, peripherals.rmt.channel0)?;
+
+    let mut leds = drivers::Leds{
+        ws: ws_rmt,
+        anode: drivers::AnodeLeds { red: anode_rgb_drivers.0, green: anode_rgb_drivers.1, blue: anode_rgb_drivers.2 },
+        cathode: drivers::CathodeLeds { red: cathode_rgb_drivers.0, green: cathode_rgb_drivers.1, blue: cathode_rgb_drivers.2 },
+    };
+
+    let initial_color = {
         let led_color = led_color_mutex.lock().unwrap();
-        ws.set_pixel(rgb::RGB {
+        rgb::RGB {
             r: led_color.get_red() as u8,
             g: led_color.get_green() as u8,
             b: led_color.get_blue() as u8,
-        })?;
-        ws
+        }
     };
-    let ws_rmt_mutex = Mutex::new(ws_rmt);
+    leds.set_color(initial_color)?;
 
-    log::info!("Max duty is: {}", red.get_max_duty());
-    let m = Mutex::new(red);
+    let leds_mutex = Mutex::new(leds);
 
     let sysloop = EspSystemEventLoop::take()?;
 
@@ -82,8 +118,7 @@ fn main() -> Result<()> {
     })?;
     srv.fn_handler("/", Method::Post, |req| {
         log::info!("Run POST handler");
-        let mut red = m.lock()?;
-        handle_post_request(req, &led_color_mutex, &ws_rmt_mutex, &mut red)
+        handle_post_request(req, &led_color_mutex, &leds_mutex)
     })?;
 
     loop {
@@ -105,8 +140,7 @@ fn handle_get_request(req: Request<&mut EspHttpConnection>, rgb_mutex: &Mutex<Rg
 fn handle_post_request(
     mut req: Request<&mut EspHttpConnection>,
     rgb_mutex: &Mutex<Rgb>,
-    ws_rmt: &Mutex<WS2812RMT>,
-    red: &mut LedcDriver,
+    leds_mutex: &Mutex<Leds>,
 ) -> HandlerResult {
     log::info!("Start processing post request");
     // assume we come from post
@@ -146,12 +180,9 @@ fn handle_post_request(
             };
             log::info!("Set RGB Pixel to: {}", rgb);
             {
-                let mut ws = ws_rmt.lock()?;
-                ws.set_pixel(rgb)?;
+                let mut leds = leds_mutex.lock()?;
+                leds.set_color(rgb)?;
             }
-            let red_duty = (c.get_red() / 255.0 * red.get_max_duty() as f32).round() as u32;
-            log::info!("Set red duty to: {}", red_duty);
-            //red.set_duty(red_duty)?;
         }
         None => {
             let v = rgb_mutex.lock()?;
