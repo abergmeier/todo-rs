@@ -36,7 +36,6 @@ epd-waveshare = { git = "https://github.com/caemor/epd-waveshare.git" }
 embedded-graphics-core = "0.4.0"
 embedded-graphics = "0.8.1"
 heapless = "0.8.0"
-esp-println = { version = "0.9.0", features = ["esp32c3"] }
 
 [build-dependencies]
 embuild = "0.31.3"

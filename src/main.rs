@@ -29,8 +29,6 @@ use esp_idf_svc::wifi::{BlockingWifi, Configuration, EspWifi};
 use heapless;
 // If using the `binstart` feature of `esp-idf-sys`, always keep this module imported
 use esp_idf_sys::{self as _};
-use log::info;
-use esp_println::println;
 
 use embedded_graphics::{prelude::*, text::Text};
 
@@ -46,8 +44,8 @@ fn main() -> Result<()> {
 
     let peripherals = Peripherals::take().unwrap();
 
-    println!("display");
-    let mut display = Display7in5::default();
+    log::info!("Setting up Display");
+    let mut display = Box::new(Display7in5::default());
     let pins = peripherals.pins;
     let spi = peripherals.spi2;
     //let mut delay = Delay::new_default();
@@ -58,21 +56,24 @@ fn main() -> Result<()> {
     let dc: AnyOutputPin = pins.gpio3.into();
     let cs: AnyOutputPin = pins.gpio4.into();
     let sclk: AnyOutputPin = pins.gpio5.into();
-
-    println!("driver");
-    let mut driver = SpiDeviceDriver::new_single(
+    
+    log::info!("Setting up SPI driver");
+    let mut spi_driver = SpiDeviceDriver::new_single(
         spi,
         sclk,
         sdo,
         Option::<AnyIOPin>::None,
-        Option::<AnyOutputPin>::None,
+        cs.into(),
         &DriverConfig::new(),
-        &Config::new().baudrate(10.MHz().into()),
+        &Config::new()
+            .baudrate(40.MHz().into())
+            .duplex(esp_idf_hal::spi::config::Duplex::Full),
     )?;
+    /*
     let mut delay = Delay::new_default();
     println!("epd");
     let mut epd = Epd7in5::new(
-        &mut driver,
+        &mut spi_driver,
         PinDriver::input(busy_in)?,
         PinDriver::output(dc)?,
         PinDriver::output(rst)?,
@@ -99,15 +100,18 @@ fn main() -> Result<()> {
 
     let mut srv = EspHttpServer::new(&Default::default())?;
 
-    loop {
-        thread::sleep(Duration::from_secs(5));
+    epd.clear_frame(&mut spi_driver, &mut delay)?;
+    epd.display_frame(&mut spi_driver, &mut delay)?;
 
-        // Create a text at position (20, 30) and draw it using the previously defined style
-        let text = Text::new("Hello Rust!", Point::new(20, 30), style);
-        println!("Drawme");
-        text.draw(&mut display)?;
-        epd.update_and_display_frame(&mut driver, display.buffer(), &mut delay)?;
-    }
+    // Create a text at position (20, 30) and draw it using the previously defined style
+    let text = Text::new("Hello Rust!", Point::new(20, 30), style);
+    println!("Drawme");
+    text.draw(&mut display)?;
+    epd.update_and_display_frame(&mut spi_driver, display.buffer(), &mut delay)?;
 
+    delay.delay_ms(5000);
+
+    epd.sleep(&mut spi_driver, &mut delay)?;
+*/
     Ok(())
 }
